@@ -1,0 +1,37 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        arch: [x64, x86, arm64]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
+      - name: Build
+        run: msbuild modules.sln -p:Configuration=Release -p:Platform=${{ matrix.arch }}
+      - name: Upload build
+        if: matrix.arch != 'x86'
+        uses: actions/upload-artifact@v4
+        with:
+          name: modules-${{ matrix.arch }}
+          path: ${{ matrix.arch }}/Release
+          if-no-files-found: error
+      - name: Upload build x86
+        if: matrix.arch == 'x86'
+        uses: actions/upload-artifact@v4
+        with:
+          name: modules-${{ matrix.arch }}
+          path: Release
+          if-no-files-found: error
