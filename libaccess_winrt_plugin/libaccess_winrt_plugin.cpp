@@ -8,6 +8,7 @@
 
 using namespace winrt;
 using namespace Windows::Storage;
+using namespace Windows::Storage::AccessCache;
 using namespace Windows::Storage::Streams;
 using namespace Windows::ApplicationModel::DataTransfer;
 using namespace Windows::Foundation;
@@ -39,7 +40,7 @@ struct access_sys_t
 namespace
 {
 	/* Check if token is a valid GUID */
-	bool is_token_valid(const hstring& access_token) {
+	bool is_shared_access_token_valid(const hstring& access_token) {
 		// GUID have fixed length
 		if (access_token.size() != 36)
 			return false;
@@ -51,6 +52,32 @@ namespace
 			if (i == 8 || i == 13 || i == 18 || i == 23)
 			{
 				// Check hyphens are at the correct positions (8 13 18 23)
+				if (wc != '-')
+					return false;
+			}
+			else
+			{
+				// Other characters must be valid hex
+				if (!iswxdigit(wc))
+					return false;
+			}
+		}
+
+		return true;
+	}
+
+	bool is_future_access_token_valid(const hstring& access_token) {
+		// GUID have fixed length
+		if (access_token.size() != 38 || access_token[0] != '{' || access_token[37] != '}')
+			return false;
+
+		for (uint32_t i = 1; i < access_token.size() - 1; ++i)
+		{
+			const auto wc = access_token[i];
+
+			if (i == 9 || i == 14 || i == 19 || i == 24)
+			{
+				// Check hyphens are at the correct positions (9 14 19 24)
 				if (wc != '-')
 					return false;
 			}
@@ -88,19 +115,20 @@ namespace
 		}
 	}
 
-	IAsyncAction open_file_from_token_async(access_sys_t* p_sys, const hstring& token)
+	IAsyncOperation<IRandomAccessStreamWithContentType> open_file_from_future_access_token_async(const hstring& token)
 	{
-		auto file = co_await SharedStorageAccessManager::RedeemTokenForFileAsync(token);
+		auto file = co_await StorageApplicationPermissions::FutureAccessList().GetFileAsync(token);
 		auto stream = co_await file.OpenReadAsync();
-		p_sys->read_stream = stream;
-		p_sys->data_reader = DataReader(stream);
+		co_return stream;
 	}
 
-	int open_file_from_token(access_sys_t* p_sys, const hstring& token)
+	int open_file_from_future_access_token(access_sys_t* p_sys, const hstring& token)
 	{
 		try
 		{
-			open_file_from_token_async(p_sys, token).get();
+			auto stream = open_file_from_future_access_token_async(token).get();
+			p_sys->read_stream = stream;
+			p_sys->data_reader = DataReader(stream);
 			return VLC_SUCCESS;
 		}
 		catch (hresult_error const& ex)
@@ -109,6 +137,43 @@ namespace
 			OutputDebugString(L"Failed to open file.");
 			return VLC_EGENERIC;
 		}
+	}
+
+	IAsyncOperation<IRandomAccessStreamWithContentType> open_file_from_shared_access_token_async(const hstring& token)
+	{
+		auto file = co_await SharedStorageAccessManager::RedeemTokenForFileAsync(token);
+		auto stream = co_await file.OpenReadAsync();
+		co_return stream;
+	}
+
+	int open_file_from_shared_access_token(access_sys_t* p_sys, const hstring& token)
+	{
+		try
+		{
+			auto stream = open_file_from_shared_access_token_async(token).get();
+			p_sys->read_stream = stream;
+			p_sys->data_reader = DataReader(stream);
+			return VLC_SUCCESS;
+		}
+		catch (hresult_error const& ex)
+		{
+			OutputDebugString(ex.message().c_str());
+			OutputDebugString(L"Failed to open file.");
+			return VLC_EGENERIC;
+		}
+	}
+
+	int noop_open_fn(access_sys_t*, const hstring&) { return VLC_EGENERIC; }
+
+	auto get_open_function(const hstring& token)
+	{
+		if (is_shared_access_token_valid(token))
+			return open_file_from_shared_access_token;
+
+		if (is_future_access_token_valid(token))
+			return open_file_from_future_access_token;
+
+		return noop_open_fn;
 	}
 
 	IAsyncOperation<unsigned int> read_async(const DataReader& reader, array_view<uint8_t> buffer)
@@ -224,17 +289,13 @@ int Open(vlc_object_t* object)
 
 	if (strncmp(access->psz_name, "winrt", 5) == 0) {
 		access_token = to_hstring(access->psz_location);
-		if (!is_token_valid(access_token))
-			return VLC_EGENERIC;
-		pf_open = open_file_from_token;
+		pf_open = get_open_function(access_token);
 	}
 	else if (strncmp(access->psz_name, "file", 4) == 0) {
 		char* pos = strstr(access->psz_filepath, "winrt:\\\\");
 		if (pos && strlen(pos) > 8) {
 			access_token = to_hstring(pos + 8);
-			if (!is_token_valid(access_token))
-				return VLC_EGENERIC;
-			pf_open = open_file_from_token;
+			pf_open = get_open_function(access_token);
 		}
 		else
 		{
@@ -243,6 +304,9 @@ int Open(vlc_object_t* object)
 		}
 	}
 	else
+		return VLC_EGENERIC;
+
+	if (pf_open == noop_open_fn)
 		return VLC_EGENERIC;
 
 	const auto p_sys = new(std::nothrow) access_sys_t{nullptr, nullptr, 0, false};

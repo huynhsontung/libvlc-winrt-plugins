@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <winrt/base.h>
 #include <winrt/windows.storage.h>
+#include <winrt/windows.storage.accesscache.h>
 #include <winrt/windows.storage.streams.h>
 #include <winrt/windows.applicationmodel.datatransfer.h>
 #include <winrt/windows.foundation.h>
