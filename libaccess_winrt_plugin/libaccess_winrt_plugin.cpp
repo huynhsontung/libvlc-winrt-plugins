@@ -35,7 +35,6 @@ struct access_sys_t
 	DataReader			data_reader;
 	uint64_t            i_pos;
 	uint32_t			retries;
-	bool                b_eof;
 };
 
 namespace
@@ -202,7 +201,6 @@ namespace
 			auto input_stream = p_sys->read_stream.GetInputStreamAt(position);
 			set_data_reader(p_sys, input_stream);
 			p_sys->i_pos = position;
-			p_sys->b_eof = position >= p_sys->read_stream.Size();
 		}
 		catch (hresult_error const& ex)
 		{
@@ -283,11 +281,7 @@ namespace
 		}
 
 		p_sys->i_pos += total_read;
-		p_sys->b_eof = p_sys->i_pos >= p_sys->read_stream.Size();
 		p_sys->retries = 0;
-		if (p_sys->b_eof) {
-			OutputDebugString(L"End of file reached\n");
-		}
 
 		return total_read;
 	}
