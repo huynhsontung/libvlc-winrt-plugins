@@ -195,6 +195,8 @@ namespace
 	int seek(stream_t* access, uint64_t position)
 	{
 		access_sys_t* p_sys = static_cast<access_sys_t*>(access->p_sys);
+		if (position > p_sys->read_stream.Size())
+			position = p_sys->read_stream.Size();
 
 		try
 		{
