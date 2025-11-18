@@ -93,11 +93,10 @@ namespace
 		return true;
 	}
 
-	void set_stream(access_sys_t* p_sys, const IRandomAccessStream& stream)
+	void set_data_reader(access_sys_t* p_sys, const IInputStream& stream)
 	{
 		auto reader = DataReader(stream);
 		reader.InputStreamOptions(InputStreamOptions::Partial | InputStreamOptions::ReadAhead);
-		p_sys->read_stream = stream;
 		p_sys->data_reader = reader;
 	}
 
@@ -105,7 +104,8 @@ namespace
 	{
 		auto file = co_await StorageFile::GetFileFromPathAsync(path);
 		auto stream = co_await file.OpenReadAsync();
-		set_stream(p_sys, stream);
+		p_sys->read_stream = stream;
+		set_data_reader(p_sys, stream.GetInputStreamAt(0));
 	}
 
 	int open_file_from_path(access_sys_t* p_sys, const hstring& path)
@@ -135,7 +135,8 @@ namespace
 		try
 		{
 			auto stream = open_file_from_future_access_token_async(token).get();
-			set_stream(p_sys, stream);
+			p_sys->read_stream = stream;
+			set_data_reader(p_sys, stream.GetInputStreamAt(0));
 			return VLC_SUCCESS;
 		}
 		catch (hresult_error const& ex)
@@ -158,7 +159,8 @@ namespace
 		try
 		{
 			auto stream = open_file_from_shared_access_token_async(token).get();
-			set_stream(p_sys, stream);
+			p_sys->read_stream = stream;
+			set_data_reader(p_sys, stream.GetInputStreamAt(0));
 			return VLC_SUCCESS;
 		}
 		catch (hresult_error const& ex)
@@ -197,11 +199,10 @@ namespace
 
 		try
 		{
-			auto clone_stream = p_sys->read_stream.CloneStream();
-			clone_stream.Seek(position);
-			set_stream(p_sys, clone_stream);
+			auto input_stream = p_sys->read_stream.GetInputStreamAt(position);
+			set_data_reader(p_sys, input_stream);
 			p_sys->i_pos = position;
-			p_sys->b_eof = p_sys->read_stream.Position() >= p_sys->read_stream.Size();
+			p_sys->b_eof = position >= p_sys->read_stream.Size();
 		}
 		catch (hresult_error const& ex)
 		{
@@ -282,7 +283,7 @@ namespace
 		}
 
 		p_sys->i_pos += total_read;
-		p_sys->b_eof = p_sys->read_stream.Position() >= p_sys->read_stream.Size();
+		p_sys->b_eof = p_sys->i_pos >= p_sys->read_stream.Size();
 		p_sys->retries = 0;
 		if (p_sys->b_eof) {
 			OutputDebugString(L"End of file reached\n");
