@@ -317,7 +317,7 @@ int Open(vlc_object_t* object)
 	if (pf_open == noop_open_fn)
 		return VLC_EGENERIC;
 
-	const auto p_sys = new(std::nothrow) access_sys_t{nullptr, nullptr, 0, false};
+	const auto p_sys = new(std::nothrow) access_sys_t{nullptr, nullptr, 0, 0};
 	if (p_sys == nullptr)
 		return VLC_EGENERIC;
 
