@@ -32,9 +32,9 @@ vlc_module_end()
 struct access_sys_t
 {
 	IRandomAccessStream read_stream;
-	DataReader data_reader;
-	uint64_t               i_pos;
-	bool                   b_eof;
+	DataReader			data_reader;
+	uint64_t            i_pos;
+	uint32_t			retries;
 };
 
 namespace
@@ -92,12 +92,19 @@ namespace
 		return true;
 	}
 
+	void set_data_reader(access_sys_t* p_sys, const IInputStream& stream)
+	{
+		auto reader = DataReader(stream);
+		reader.InputStreamOptions(InputStreamOptions::Partial | InputStreamOptions::ReadAhead);
+		p_sys->data_reader = reader;
+	}
+
 	IAsyncAction open_file_from_path_async(access_sys_t* p_sys, const hstring& path)
 	{
 		auto file = co_await StorageFile::GetFileFromPathAsync(path);
 		auto stream = co_await file.OpenReadAsync();
 		p_sys->read_stream = stream;
-		p_sys->data_reader = DataReader(stream);
+		set_data_reader(p_sys, stream.GetInputStreamAt(0));
 	}
 
 	int open_file_from_path(access_sys_t* p_sys, const hstring& path)
@@ -128,7 +135,7 @@ namespace
 		{
 			auto stream = open_file_from_future_access_token_async(token).get();
 			p_sys->read_stream = stream;
-			p_sys->data_reader = DataReader(stream);
+			set_data_reader(p_sys, stream.GetInputStreamAt(0));
 			return VLC_SUCCESS;
 		}
 		catch (hresult_error const& ex)
@@ -152,7 +159,7 @@ namespace
 		{
 			auto stream = open_file_from_shared_access_token_async(token).get();
 			p_sys->read_stream = stream;
-			p_sys->data_reader = DataReader(stream);
+			set_data_reader(p_sys, stream.GetInputStreamAt(0));
 			return VLC_SUCCESS;
 		}
 		catch (hresult_error const& ex)
@@ -188,12 +195,14 @@ namespace
 	int seek(stream_t* access, uint64_t position)
 	{
 		access_sys_t* p_sys = static_cast<access_sys_t*>(access->p_sys);
+		if (position > p_sys->read_stream.Size())
+			position = p_sys->read_stream.Size();
 
 		try
 		{
-			p_sys->read_stream.Seek(position);
+			auto input_stream = p_sys->read_stream.GetInputStreamAt(position);
+			set_data_reader(p_sys, input_stream);
 			p_sys->i_pos = position;
-			p_sys->b_eof = p_sys->read_stream.Position() >= p_sys->read_stream.Size();
 		}
 		catch (hresult_error const& ex)
 		{
@@ -262,8 +271,10 @@ namespace
 		{
 			OutputDebugString(L"Failure while reading block\n");
 			if (ex.code() == HRESULT_FROM_WIN32(ERROR_OPLOCK_HANDLE_CLOSED)) {
-				if (open_file_from_path(p_sys, to_hstring(access->psz_location)) == VLC_SUCCESS) {
-					p_sys->read_stream.Seek(p_sys->i_pos);
+				if (open_file_from_path(p_sys, to_hstring(access->psz_location)) == VLC_SUCCESS
+					&& seek(access, p_sys->i_pos) == VLC_SUCCESS
+					&& p_sys->retries < 3) {
+					p_sys->retries++;
 					return read(access, buffer, size);
 				}
 				OutputDebugString(L"Failed to reopen file\n");
@@ -272,10 +283,7 @@ namespace
 		}
 
 		p_sys->i_pos += total_read;
-		p_sys->b_eof = p_sys->read_stream.Position() >= p_sys->read_stream.Size();
-		if (p_sys->b_eof) {
-			OutputDebugString(L"End of file reached\n");
-		}
+		p_sys->retries = 0;
 
 		return total_read;
 	}
@@ -309,11 +317,11 @@ int Open(vlc_object_t* object)
 	if (pf_open == noop_open_fn)
 		return VLC_EGENERIC;
 
-	const auto p_sys = new(std::nothrow) access_sys_t{nullptr, nullptr, 0, false};
-	access->p_sys = p_sys;
+	const auto p_sys = new(std::nothrow) access_sys_t{nullptr, nullptr, 0, 0};
 	if (p_sys == nullptr)
 		return VLC_EGENERIC;
 
+	access->p_sys = p_sys;
 	if (pf_open(p_sys, access_token) != VLC_SUCCESS) {
 		OutputDebugStringW(L"Error opening file with Path");
 		Close(object);
